@@ -2,6 +2,9 @@
     $color = method_exists($this, 'getColor') ? $this->getColor() : 'gray';
     $heading = method_exists($this, 'getHeading') ? $this->getHeading() : 'Throughput Heatmap (density)';
     $description = method_exists($this, 'getDescription') ? $this->getDescription() : null;
+
+    $cols = count($xLabels ?? []);
+    $rows = count($yLabels ?? []);
 @endphp
 
 <x-filament-widgets::widget class="fi-wi-chart">
@@ -11,13 +14,6 @@
                 wire:poll.{{ $pollingInterval }}
             @endif
         >
-            @php
-                $cols = count($xLabels ?? []);
-                $rows = count($yLabels ?? []);
-                $gapXPercent = $width > 0 ? ($gap / $width) * 100 : 0;
-                $gapYPercent = $height > 0 ? ($gap / $height) * 100 : 0;
-            @endphp
-
             {{-- Heatmap + legend (3 columns: Y label | heatmap | legend) --}}
             <div class="w-full" wire:key="throughput-heatmap-all">
                 <div class="grid items-stretch gap-x-4 sm:gap-x-6" style="grid-template-columns: auto 1fr auto;">
@@ -29,9 +25,9 @@
                         </span>
                     </div>
 
-                    {{-- Heatmap (this alone sets the row height) --}}
+                    {{-- Heatmap (sets row height via aspect-ratio) --}}
                     <div class="min-w-0">
-                        <div x-data="heatmapTooltip()" x-ref="wrap" class="relative w-full"
+                        <div x-data="heatmapTooltip(chartJsTooltipOpts)" x-ref="wrap" class="relative w-full"
                              style="aspect-ratio: {{ $width }} / {{ $height }};"
                              @mouseleave="leave()">
 
@@ -46,37 +42,56 @@
                                         x="{{ $t['x'] }}" y="{{ $t['y'] }}"
                                         width="{{ $t['w'] }}" height="{{ $t['h'] }}"
                                         fill="{{ $t['fill'] }}" rx="2" ry="2"
-                                        stroke="{{ $tileStrokeColor }}" stroke-width="stroke-width="{{ $tileStrokeWidth }}"
-                                        {{-- send tooltip data on hover --}}
-                                        @mouseenter="enter({ 
-                                            u: '{{ e($t['uLabel'] ?? '') }}', 
-                                            d: '{{ e($t['dLabel'] ?? '') }}', 
-                                            count: {{ (int)($t['count'] ?? 0) }}, 
-                                            color: '{{ $t['fill'] }}', 
-                                            hasData: {{ !empty($t['hasData']) ? 'true' : 'false' }} 
-                                        })"
+                                        stroke="{{ $tileStrokeColor ?? 'rgba(0,0,0,0.2)' }}"
+                                        stroke-width="{{ $tileStrokeWidth ?? 0.5 }}"
+
+                                        {{-- tooltip payload via dataset (avoids Blade quoting issues) --}}
+                                        data-u="{{ $t['uLabel'] ?? '' }}"
+                                        data-d="{{ $t['dLabel'] ?? '' }}"
+                                        data-count="{{ (int)($t['count'] ?? 0) }}"
+                                        data-color="{{ $t['fill'] ?? '' }}"
+                                        data-has-data="{{ !empty($t['hasData']) ? 1 : 0 }}"
+
+                                        @mouseenter="enter($event)"
                                     />
                                 @endforeach
                             </svg>
 
-                            {{-- Floating tooltip --}}
-                            <div x-cloak x-show="show" x-ref="tip" :style="style"
-                                 class="pointer-events-none absolute z-20 min-w-[180px] rounded-lg bg-gray-900 bg-opacity-95 p-2 text-[11px] text-white shadow-lg ring-1 ring-black/40">
-                                <div class="font-semibold mb-1">Throughput bin</div>
+                            {{-- Chart.js-like tooltip --}}
+                            <div x-cloak x-show="opts.enabled && show" x-ref="tip"
+                                 :data-caret="caretSide"
+                                 :style="tipStyle"
+                                 class="hm-tip pointer-events-none absolute z-20 min-w-[180px] shadow-lg">
 
-                                <div class="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1">
-                                    <div class="flex flex-row">
-                                        <span class="inline-block h-3 w-3 rounded-sm" :style="{ background: hsl(199, 89%, 48%); }"></span>
-                                        <span><span class="opacity-70">Download:</span> <span x-text="info?.d"></span> Mbps</span>
+                                {{-- title --}}
+                                <template x-if="titleText">
+                                    <div class="hm-title" x-text="titleText"></div>
+                                </template>
+
+                                {{-- body (Download/Upload with color boxes) --}}
+                                <div class="hm-body">
+                                    <div class="hm-row">
+                                        <template x-if="opts.displayColors">
+                                            <span class="hm-box" :style="boxStyle('#38bdf8')"></span> {{-- sky-400 --}}
+                                        </template>
+                                        <span class="hm-label"><span class="hm-dim">Download:</span> <span x-text="info?.d"></span> Mbps</span>
                                     </div>
-                                    <div class="flex flex-row">
-                                        <span class="inline-block h-3 w-3 rounded-sm" :style="{ background: hsl(0, 95%, 49%); }"></span>
-                                        <span><span class="opacity-70">Upload:</span> <span x-text="info?.u"></span> Mbps</span>
+                                    <div class="hm-row">
+                                        <template x-if="opts.displayColors">
+                                            <span class="hm-box" :style="boxStyle('#ef4444')"></span> {{-- red-500 --}}
+                                        </template>
+                                        <span class="hm-label"><span class="hm-dim">Upload:</span> <span x-text="info?.u"></span> Mbps</span>
                                     </div>
                                 </div>
 
+                                {{-- footer --}}
+                                <template x-if="footerText">
+                                    <div class="hm-footer" x-text="footerText"></div>
+                                </template>
+
+                                {{-- no-data note --}}
                                 <template x-if="info && !info.hasData">
-                                    <div class="mt-1 italic opacity-60">No data</div>
+                                    <div class="italic opacity-70">No data</div>
                                 </template>
                             </div>
                         </div>
@@ -88,11 +103,11 @@
                         </div>
                     </div>
 
-                    {{-- Vertical legend (stretches to the heatmap height) --}}
-                    <div class="w-16 sm:w-20 shrink-0 relative">
+                    {{-- Vertical legend (visuals aligned with Chart.js defaults) --}}
+                    <div class="w-16 sm:w-20 shrink-0 relative hm-legend">
                         <div class="h-full relative" style="height: 85%;">
                             {{-- gradient bar --}}
-                            <div class="absolute inset-y-0 left-0 w-4 sm:w-5 rounded-md overflow-hidden border border-gray-300 dark:border-gray-600">
+                            <div class="absolute inset-y-0 left-0 w-4 sm:w-5 rounded-md overflow-hidden hm-legend-bar">
                                 <div class="flex h-full w-full flex-col">
                                     @foreach ($legendBar as $color)
                                         <span style="background: {{ $color }}; height: {{ 100 / max(count($legendBar),1) }}%;"></span>
@@ -104,10 +119,8 @@
                             @foreach ($legendTicks as $tick)
                                 <div class="absolute flex items-center gap-2"
                                      style="left: calc(1.25rem + 4px); top: {{ $tick['pos'] }}%; transform: translateY(-50%);">
-                                    <span class="h-px w-2 bg-gray-400 dark:bg-gray-500"></span>
-                                    <span class="text-xs font-medium text-gray-600 dark:text-gray-300 whitespace-nowrap">
-                                        {{ $tick['value'] }}
-                                    </span>
+                                    <span class="hm-legend-line"></span>
+                                    <span class="hm-legend-label">{{ $tick['value'] }}</span>
                                 </div>
                             @endforeach
                         </div>
@@ -120,45 +133,210 @@
             </div>
         </div>
 
+        {{-- Styles: tooltip & legend (Chart.js defaults) --}}
         <style>
-            .vertical-text{
-                writing-mode: vertical-rl;
-                text-orientation: mixed;
-            }
+            .vertical-text{ writing-mode: vertical-rl; text-orientation: mixed; }
             [x-cloak]{ display:none !important; }
+
+            /* Tooltip driven by CSS variables from JS to mirror Chart.js options */
+            .hm-tip{
+                font-size: var(--font-size, 12px); /* default 12px */
+                font-family: var(--ff, 'Helvetica Neue', 'Helvetica', 'Arial', sans-serif);
+                line-height: 1.2;
+                --bg: rgba(0,0,0,0.8);
+                --title-color: #fff;
+                --body-color: #fff;
+                --footer-color: #fff;
+                --border-color: rgba(0,0,0,0);
+                --border-width: 0px;
+                --pad: 6px;
+                --corner: 6px;
+                --title-mb: 6px;
+                --body-gap: 2px;
+                --footer-mt: 6px;
+                --caret-size: 5px;
+                --caret-pad: 2px;
+                --caret-x: 12px; /* where the caret meets the box */
+                background: var(--bg);
+                color: var(--body-color);
+                padding: var(--pad);
+                border: var(--border-width) solid var(--border-color);
+                border-radius: var(--corner);
+            }
+            .hm-tip::after{
+                /* caret arrow */
+                content: "";
+                position: absolute;
+                width: 0; height: 0;
+                border: var(--caret-size) solid transparent;
+            }
+            .hm-tip[data-caret="top"]::after{
+                bottom: calc(100% - var(--caret-pad));
+                left: var(--caret-x);
+                border-bottom-color: var(--bg);
+            }
+            .hm-tip[data-caret="bottom"]::after{
+                top: calc(100% - var(--caret-pad));
+                left: var(--caret-x);
+                border-top-color: var(--bg);
+            }
+            .hm-title{ color: var(--title-color); font-weight: 700; margin-bottom: var(--title-mb); }
+            .hm-body{ display: grid; gap: var(--body-gap); }
+            .hm-row{ display: flex; align-items: center; }
+            .hm-box{ display:inline-block; border-radius: 2px; margin-right: 4px; }
+            .hm-label{ color: var(--body-color); }
+            .hm-dim{ opacity: .7; }
+            .hm-footer{ color: var(--footer-color); font-weight: 700; margin-top: var(--footer-mt); }
+
+            /* Legend visuals akin to Chart.js */
+            .hm-legend-bar{ border: 0 solid rgba(0,0,0,0); border-radius: 6px; }
+            .hm-legend-line{ width: 8px; height: 1px; background-color: rgba(255,255,255,.5); display:inline-block; }
+            .hm-legend-label{ color: #fff; font-size: 11px; }
         </style>
 
-        {{-- Alpine helper (declared once per page; harmless if re-declared) --}}
+        {{-- Chart.js-like tooltip options + Alpine controller --}}
         <script>
+            // Options object using Chart.js tooltip property names
+            window.chartJsTooltipOpts = {
+            enabled: true,
+            external: null,
+            mode: 'nearest',
+            intersect: true,
+            position: 'average',
+
+            backgroundColor: 'rgba(0,0,0,0.8)',
+            titleColor: '#fff',
+            titleFont: { weight: 'bold' }, // family/size/style inherit global (12px normal)
+            titleAlign: 'left',
+            titleSpacing: 2,
+            titleMarginBottom: 6,
+
+            bodyColor: '#fff',
+            bodyFont: { size:12 },                  // inherits global: 12px normal
+            bodyAlign: 'left',
+            bodySpacing: 2,
+
+            footerColor: '#fff',
+            footerFont: { weight: 'bold' },
+            footerAlign: 'left',
+            footerSpacing: 2,
+            footerMarginTop: 6,
+
+            padding: 6,
+            caretPadding: 2,
+            caretSize: 5,
+            cornerRadius: 6,
+
+            multiKeyBackground: '#fff',
+            displayColors: true,
+            boxWidth: 12,                  // Chart.js uses bodyFont.size
+            boxHeight: 12,                 // "
+            boxPadding: 1,
+            usePointStyle: false,
+
+            borderColor: 'rgba(0,0,0,0)',
+            borderWidth: 0,
+
+            rtl: false,                    // Chart.js inherits canvas; leaving false is fine
+            textDirection: 'ltr',          // (optional) omit to inherit canvas default
+            xAlign: undefined,
+            yAlign: undefined,
+
+                callbacks: {
+                    title: (ctx) => 'Throughput bin',
+                    footer: (ctx) => {
+                        const raw = ctx?.[0]?.raw;
+                        return raw && typeof raw.count !== 'undefined'
+                            ? `Frequency: ${raw.count}`
+                            : '';
+                    },
+                },
+            };
+
             document.addEventListener('alpine:init', () => {
-                if (!window.__heatmapTooltipDefined) {
-                    Alpine.data('heatmapTooltip', () => ({
-                        show: false,
-                        x: 0, y: 0,
-                        info: null,
-                        enter(info) { this.info = info; this.show = true; },
-                        leave() { this.show = false; },
-                        move(e) {
-                            const rect = this.$refs.wrap.getBoundingClientRect();
-                            this.x = e.clientX - rect.left;
-                            this.y = e.clientY - rect.top;
-                        },
-                        get style() {
-                            const pad = 12;
-                            const wrap = this.$refs.wrap.getBoundingClientRect();
-                            const tip = this.$refs.tip;
-                            const tw = tip ? tip.offsetWidth : 180;
-                            const th = tip ? tip.offsetHeight : 80;
-                            let left = this.x + pad;
-                            let top  = this.y + pad;
-                            if (left + tw > wrap.width) left = this.x - tw - pad;
-                            if (top + th > wrap.height) top = this.y - th - pad;
-                            left = Math.max(0, left); top = Math.max(0, top);
-                            return `left:${left}px;top:${top}px;`;
-                        },
-                    }));
-                    window.__heatmapTooltipDefined = true;
-                }
+                Alpine.data('heatmapTooltip', (opts) => ({
+                    opts,
+                    show: false,
+                    x: 0, y: 0,
+                    info: null,
+                    caretSide: 'top',
+
+                    enter(e){
+                        const el = e.currentTarget;
+                        this.info = {
+                            u: el.dataset.u || '',
+                            d: el.dataset.d || '',
+                            count: Number(el.dataset.count || 0),
+                            color: el.dataset.color || '#fff',
+                            hasData: el.dataset.hasData === '1' || el.dataset.hasData === 'true',
+                        };
+                        this.show = true;
+                    },
+                    leave(){ this.show = false; },
+                    move(e){
+                        const r = this.$refs.wrap.getBoundingClientRect();
+                        this.x = e.clientX - r.left;
+                        this.y = e.clientY - r.top;
+                    },
+
+                    get titleText(){
+                        return this.opts.callbacks?.title?.([{ raw: this.info }]) ?? 'Throughput bin';
+                    },
+                    get footerText(){
+                        return this.opts.callbacks?.footer?.([{ raw: this.info }]) ?? '';
+                    },
+
+                    // Compute style from Chart.js-like options
+                    get tipStyle(){
+                        const o = this.opts;
+                        const fs = Number(o.bodyFont?.size ?? 12);
+                        const wrap = this.$refs.wrap.getBoundingClientRect();
+                        const tip  = this.$refs.tip;
+                        const tw = tip ? tip.offsetWidth : 180;
+                        const th = tip ? tip.offsetHeight : 80;
+
+                        const pad = Number(o.caretPadding ?? 2);
+                        const caret = Number(o.caretSize ?? 5);
+
+                        // base position (like 'average')
+                        let left = this.x + pad + caret;
+                        let top  = this.y + pad + caret;
+                        this.caretSide = 'top';
+
+                        // overflow handling (flip if needed)
+                        if (left + tw > wrap.width) left = this.x - tw - pad - caret;
+                        if (top  + th > wrap.height) { top = this.y - th - pad - caret; this.caretSide = 'bottom'; }
+
+                        left = Math.max(0, left);
+                        top  = Math.max(0, top);
+
+                        // map options to CSS vars
+                        return `
+                            left:${left}px; top:${top}px;
+                            --fs:${fs}px;
+                            --bg:${o.backgroundColor};
+                            --title-color:${o.titleColor};
+                            --body-color:${o.bodyColor};
+                            --footer-color:${o.footerColor};
+                            --border-color:${o.borderColor};
+                            --border-width:${o.borderWidth}px;
+                            --pad:${o.padding}px;
+                            --corner:${o.cornerRadius}px;
+                            --title-mb:${o.titleMarginBottom}px;
+                            --body-gap:${o.bodySpacing}px;
+                            --footer-mt:${o.footerMarginTop}px;
+                            --caret-size:${o.caretSize}px;
+                            --caret-pad:${o.caretPadding}px;
+                            --caret-x:${(o.padding ?? 6) + (o.boxWidth ?? fs)}px;
+                        `;
+                    },
+
+                    boxStyle(color){
+                        const o = this.opts;
+                        const w = o.boxWidth ?? 8, h = o.boxHeight ?? 8, p = (o.boxPadding ?? 1);
+                        return `background:${color}; width:${w}px; height:${h}px; margin-right:${p * 4}px;`;
+                    },
+                }));
             });
         </script>
     </x-filament::section>
