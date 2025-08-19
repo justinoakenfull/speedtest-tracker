@@ -333,7 +333,10 @@
 
                     boxStyle(color){
                         const o = this.opts;
-                        const w = o.boxWidth ?? 8, h = o.boxHeight ?? 8, p = (o.boxPadding ?? 1);
+                        const fs = Number(o.bodyFont?.size ?? 12);
+                        const w = o.boxWidth ?? fs;
+                        const h = o.boxHeight ?? fs;
+                        const p = o.boxPadding ?? 1;
                         return `background:${color}; width:${w}px; height:${h}px; margin-right:${p * 4}px;`;
                     },
                 }));
