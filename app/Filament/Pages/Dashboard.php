@@ -9,6 +9,7 @@ use App\Filament\Widgets\RecentPingChartWidget;
 use App\Filament\Widgets\RecentUploadChartWidget;
 use App\Filament\Widgets\RecentUploadLatencyChartWidget;
 use App\Filament\Widgets\StatsOverviewWidget;
+use App\Filament\Widgets\RecentThroughputHeatmapWidget;
 use Carbon\Carbon;
 use Cron\CronExpression;
 use Filament\Pages\Dashboard as BasePage;
@@ -38,6 +39,7 @@ class Dashboard extends BasePage
     {
         return [
             StatsOverviewWidget::make(),
+            RecentThroughputHeatmapWidget::make(),
             RecentDownloadChartWidget::make(),
             RecentUploadChartWidget::make(),
             RecentPingChartWidget::make(),
