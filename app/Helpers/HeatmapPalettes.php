@@ -22,7 +22,7 @@ final class HeatmapPalettes
             $parts[] = "{$hex} {$pct}%";
         }
 
-        return "linear-gradient(to right, " . implode(', ', $parts) . ")";
+        return 'linear-gradient(to right, '.implode(', ', $parts).')';
     }
 
     /**
@@ -38,6 +38,7 @@ final class HeatmapPalettes
             [$p1, $c1] = $stops[$i + 1];
             if ($t >= $p0 && $t <= $p1) {
                 $local = ($t - $p0) / max(1e-9, ($p1 - $p0));
+
                 return self::lerpHex($c0, $c1, $local);
             }
         }
@@ -49,12 +50,12 @@ final class HeatmapPalettes
     public static function options(): array
     {
         return [
-            'viridis'  => 'Viridis (CVD-friendly)',
-            'magma'    => 'Magma (CVD-aware)',
-            'cividis'  => 'Cividis (CVD-aware)',
-            'turbo'    => 'Turbo',
-            'blues'    => 'Blues (mono)',
-            'greys'    => 'Greys (mono)',
+            'viridis' => 'Viridis (CVD-friendly)',
+            'magma' => 'Magma (CVD-aware)',
+            'cividis' => 'Cividis (CVD-aware)',
+            'turbo' => 'Turbo',
+            'blues' => 'Blues (mono)',
+            'greys' => 'Greys (mono)',
         ];
     }
 
@@ -108,6 +109,7 @@ final class HeatmapPalettes
         if (strlen($hex) === 3) {
             $hex = "{$hex[0]}{$hex[0]}{$hex[1]}{$hex[1]}{$hex[2]}{$hex[2]}";
         }
+
         return [
             hexdec(substr($hex, 0, 2)),
             hexdec(substr($hex, 2, 2)),
