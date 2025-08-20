@@ -1,146 +1,189 @@
 @php
     $color = method_exists($this, 'getColor') ? $this->getColor() : 'gray';
-    $heading = method_exists($this, 'getHeading') ? $this->getHeading() : 'Throughput Heatmap (density)';
+    $heading = method_exists($this, 'getHeading') ? $this->getHeading() : 'Network Heatmaps';
     $description = method_exists($this, 'getDescription') ? $this->getDescription() : null;
 
-    $cols = count($xLabels ?? []);
-    $rows = count($yLabels ?? []);
+    /** @var array<int,array> $panels */
+    $panels = $panels ?? [];
+
+    // Palette data from the widget (with safe fallbacks if not passed)
+    $palettes = $palettes
+        ?? (method_exists($this, 'paletteOptions') ? $this->paletteOptions() : []);
+    $selectedPalette = $selectedPalette
+        ?? (property_exists($this, 'palette') ? $this->palette : 'pinkblue');
 @endphp
 
 <x-filament-widgets::widget class="fi-wi-chart">
-    <x-filament::section :description="$description" :heading="$heading">
+
+    <x-filament::section :description="$description">
+        <x-slot name="heading">
+            {{ $heading }}
+        </x-slot>
+
+<x-slot name="headerEnd">
+    <x-filament::input.wrapper class="w-max sm:-my-2" wire:key="heatmap-palette-select-wrp">
+
+        <select
+            wire:model.live="palette"
+            aria-label="Palette"
+            class="fi-select-input block w-full border-none bg-transparent ps-2 py-1.5 pe-8 text-base text-gray-950 transition duration-75 focus:ring-0 disabled:text-gray-500 disabled:[-webkit-text-fill-color:theme(colors.gray.500)] dark:text-white dark:disabled:text-gray-400 dark:disabled:[-webkit-text-fill-color:theme(colors.gray.400)] sm:text-sm sm:leading-6 [&_optgroup]:bg-white [&_optgroup]:dark:bg-gray-900 [&_option]:bg-white [&_option]:dark:bg-gray-900 ps-0"
+        >
+            @foreach ($palettes as $key => $label)
+                <option value="{{ $key }}">{{ $label }}</option>
+            @endforeach
+        </select>
+    </x-filament::input.wrapper>
+</x-slot>
+
         <div
             @if (method_exists($this, 'getPollingInterval') && ($pollingInterval = $this->getPollingInterval()))
                 wire:poll.{{ $pollingInterval }}
             @endif
         >
-            {{-- Heatmap + legend (3 columns: Y label | heatmap | legend) --}}
-            <div class="w-full" wire:key="throughput-heatmap-all">
-                <div class="grid items-stretch gap-x-4 sm:gap-x-6" style="grid-template-columns: auto 1fr auto;">
 
-                    {{-- Y-axis title column (stretches to the heatmap height) --}}
-                    <div class="w-6 sm:w-8 md:w-10 shrink-0 flex items-center justify-center">
-                        <span class="vertical-text text-xs sm:text-sm font-medium text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                            Download (Mbps) ↑
-                        </span>
-                    </div>
+            <div class="w-full" wire:key="throughput-heatmaps-all">
+                <div class="grid grid-cols-1 gap-6 md:grid-cols-2">
 
-                    {{-- Heatmap (sets row height via aspect-ratio) --}}
-                    <div class="min-w-0">
-                        <div x-data="heatmapTooltip(chartJsTooltipOpts)" x-ref="wrap" class="relative w-full"
-                             style="aspect-ratio: {{ $width }} / {{ $height }};"
-                             @mouseleave="leave()">
+                    @foreach ($panels as $i => $panel)
+                        @php
+                            $width   = $panel['width']  ?? 300;
+                            $height  = $panel['height'] ?? 300;
+                            $tiles   = $panel['tiles']  ?? [];
+                            $legendBar   = $panel['legendBar']   ?? [];
+                            $legendTicks = $panel['legendTicks'] ?? [];
+                            $tileStrokeColor = $panel['tileStrokeColor'] ?? 'rgba(0,0,0,0.2)';
+                            $tileStrokeWidth = $panel['tileStrokeWidth'] ?? 0.5;
 
-                            <svg xmlns="http://www.w3.org/2000/svg"
-                                 viewBox="0 0 {{ $width }} {{ $height }}"
-                                 preserveAspectRatio="none"
-                                 class="h-full w-full rounded-lg"
-                                 @mousemove="move($event)">
-                                <rect x="0" y="0" width="{{ $width }}" height="{{ $height }}" fill="none" />
-                                @foreach ($tiles as $t)
-                                    <rect
-                                        x="{{ $t['x'] }}" y="{{ $t['y'] }}"
-                                        width="{{ $t['w'] }}" height="{{ $t['h'] }}"
-                                        fill="{{ $t['fill'] }}" rx="2" ry="2"
-                                        stroke="{{ $tileStrokeColor ?? 'rgba(0,0,0,0.2)' }}"
-                                        stroke-width="{{ $tileStrokeWidth ?? 0.5 }}"
+                            $xAxisTitle = trim(($panel['xAxisTitle'] ?? ''));
+                            $yAxisTitle = trim(($panel['yAxisTitle'] ?? ''));
+                            $xLabels    = $panel['xLabels'] ?? [];
+                            $yLabels    = $panel['yLabels'] ?? [];
+                        @endphp
 
-                                        {{-- tooltip payload via dataset (avoids Blade quoting issues) --}}
-                                        data-u="{{ $t['uLabel'] ?? '' }}"
-                                        data-d="{{ $t['dLabel'] ?? '' }}"
-                                        data-count="{{ (int)($t['count'] ?? 0) }}"
-                                        data-color="{{ $t['fill'] ?? '' }}"
-                                        data-has-data="{{ !empty($t['hasData']) ? 1 : 0 }}"
-
-                                        @mouseenter="enter($event)"
-                                    />
-                                @endforeach
-                            </svg>
-
-                            {{-- Chart.js-like tooltip --}}
-                            <div x-cloak x-show="opts.enabled && show" x-ref="tip"
-                                 :data-caret="caretSide"
-                                 :style="tipStyle"
-                                 class="hm-tip pointer-events-none absolute z-20 min-w-[180px] shadow-lg">
-
-                                {{-- title --}}
-                                <template x-if="titleText">
-                                    <div class="hm-title" x-text="titleText"></div>
-                                </template>
-
-                                {{-- body (Download/Upload with color boxes) --}}
-                                <div class="hm-body">
-                                    <div class="hm-row">
-                                        <template x-if="opts.displayColors">
-                                            <span class="hm-box" :style="boxStyle('#38bdf8')"></span> {{-- sky-400 --}}
-                                        </template>
-                                        <span class="hm-label"><span class="hm-dim">Download:</span> <span x-text="info?.d"></span> Mbps</span>
-                                    </div>
-                                    <div class="hm-row">
-                                        <template x-if="opts.displayColors">
-                                            <span class="hm-box" :style="boxStyle('#ef4444')"></span> {{-- red-500 --}}
-                                        </template>
-                                        <span class="hm-label"><span class="hm-dim">Upload:</span> <span x-text="info?.u"></span> Mbps</span>
-                                    </div>
+                        <div class="space-y-3" wire:key="throughput-heatmap-{{ $i }}">
+                            <div class="flex items-center justify-between">
+                                <div class="text-sm font-medium">
+                                    {{ $panel['title'] ?? 'Heatmap' }}
                                 </div>
 
-                                {{-- footer --}}
-                                <template x-if="footerText">
-                                    <div class="hm-footer" x-text="footerText"></div>
-                                </template>
-
-                                {{-- no-data note --}}
-                                <template x-if="info && !info.hasData">
-                                    <div class="italic opacity-70">No data</div>
-                                </template>
-                            </div>
-                        </div>
-
-                        <div class="mt-3 text-center">
-                            <span class="text-xs sm:text-sm font-medium text-gray-500 dark:text-gray-400">
-                                Upload (Mbps) →
-                            </span>
-                        </div>
-                    </div>
-
-                    {{-- Vertical legend (visuals aligned with Chart.js defaults) --}}
-                    <div class="w-16 sm:w-20 shrink-0 relative hm-legend">
-                        <div class="h-full relative" style="height: 85%;">
-                            {{-- gradient bar --}}
-                            <div class="absolute inset-y-0 left-0 w-4 sm:w-5 rounded-md overflow-hidden hm-legend-bar">
-                                <div class="flex h-full w-full flex-col">
-                                    @foreach ($legendBar as $color)
-                                        <span style="background: {{ $color }}; height: {{ 100 / max(count($legendBar),1) }}%;"></span>
-                                    @endforeach
-                                </div>
                             </div>
 
-                            {{-- tick marks / labels --}}
-                            @foreach ($legendTicks as $tick)
-                                <div class="absolute flex items-center gap-2"
-                                     style="left: calc(1.25rem + 4px); top: {{ $tick['pos'] }}%; transform: translateY(-50%);">
-                                    <span class="hm-legend-line"></span>
-                                    <span class="hm-legend-label">{{ $tick['value'] }}</span>
-                                </div>
-                            @endforeach
-                        </div>
+                            <div class="grid items-stretch gap-x-4 sm:gap-x-6" style="grid-template-columns: auto 1fr auto;">
 
-                        <div class="mt-3 text-xs sm:text-sm font-medium text-gray-500 dark:text-gray-400 text-center">
-                            Frequency
+                                <div class="w-6 sm:w-8 md:w-10 shrink-0 flex items-center justify-center">
+                                    <span class="vertical-text text-xs sm:text-sm font-medium text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                                        {{ $yAxisTitle }}
+                                    </span>
+                                </div>
+
+                                <div class="min-w-0">
+                                    <div x-data="heatmapTooltip(chartJsTooltipOpts)" x-ref="wrap" class="relative w-full"
+                                         style="aspect-ratio: {{ $width }} / {{ $height }};"
+                                         @mouseleave="leave()">
+                                        <svg xmlns="http://www.w3.org/2000/svg"
+                                             viewBox="0 0 {{ $width }} {{ $height }}"
+                                             preserveAspectRatio="none"
+                                             class="h-full w-full rounded-lg"
+                                             @mousemove="move($event)">
+                                            <rect x="0" y="0" width="{{ $width }}" height="{{ $height }}" fill="none" />
+                                            @foreach ($tiles as $t)
+                                                <rect
+                                                    x="{{ $t['x'] }}" y="{{ $t['y'] }}"
+                                                    width="{{ $t['w'] }}" height="{{ $t['h'] }}"
+                                                    fill="{{ $t['fill'] }}" rx="2" ry="2"
+                                                    stroke="{{ $tileStrokeColor }}"
+                                                    stroke-width="{{ $tileStrokeWidth }}"
+                                                    data-u="{{ $t['uLabel'] ?? '' }}"
+                                                    data-d="{{ $t['dLabel'] ?? '' }}"
+                                                    data-count="{{ (int)($t['count'] ?? 0) }}"
+                                                    data-color="{{ $t['fill'] ?? '' }}"
+                                                    data-has-raw="{{ !empty($t['hasRaw']) ? 1 : 0 }}"
+
+                                                    @mouseenter="enter($event)"
+                                                />
+                                            @endforeach
+                                        </svg>
+
+                                        <div x-cloak x-show="opts.enabled && show" x-ref="tip"
+                                             :data-caret="caretSide"
+                                             :style="tipStyle"
+                                             class="hm-tip pointer-events-none absolute z-20 min-w-[180px] shadow-lg">
+
+                                            <template x-if="titleText">
+                                                <div class="hm-title" x-text="titleText"></div>
+                                            </template>
+
+                                            <div class="hm-body">
+                                                <div class="hm-row">
+                                                    <template x-if="opts.displayColors">
+                                                        <span class="hm-box" :style="boxStyle('#38bdf8')"></span>
+                                                    </template>
+                                                    <span class="hm-label">
+                                                        <span class="hm-dim">{{ $yAxisTitle }}:</span> <span x-text="info?.d"></span>
+                                                    </span>
+                                                </div>
+                                                <div class="hm-row">
+                                                    <template x-if="opts.displayColors">
+                                                        <span class="hm-box" :style="boxStyle('#ef4444')"></span>
+                                                    </template>
+                                                    <span class="hm-label">
+                                                        <span class="hm-dim">{{ $xAxisTitle }}:</span> <span x-text="info?.u"></span>
+                                                    </span>
+                                                </div>
+                                            </div>
+
+                                            <template x-if="footerText">
+                                                <div class="hm-footer" x-text="footerText"></div>
+                                            </template>
+                                            <template x-if="info && !info.hasRaw">
+                                                <div class="italic opacity-70">No data</div>
+                                            </template>
+                                        </div>
+                                    </div>
+
+                                    <div class="mt-3 text-center">
+                                        <span class="text-xs sm:text-sm font-medium text-gray-500 dark:text-gray-400">
+                                            {{ $xAxisTitle }}
+                                        </span>
+                                    </div>
+                                </div>
+
+                                <div class="w-16 sm:w-20 shrink-0 relative hm-legend">
+                                    <div class="h-full relative" style="height: 85%;">
+                                        <div class="absolute inset-y-0 left-0 w-4 sm:w-5 rounded-md overflow-hidden hm-legend-bar">
+                                            <div class="flex h-full w-full flex-col">
+                                                @foreach ($legendBar as $color)
+                                                    <span style="background: {{ $color }}; height: {{ 100 / max(count($legendBar),1) }}%;"></span>
+                                                @endforeach
+                                            </div>
+                                        </div>
+
+                                        @foreach ($legendTicks as $tick)
+                                            <div class="absolute flex items-center gap-2"
+                                                 style="left: calc(1.25rem + 4px); top: {{ $tick['pos'] }}%; transform: translateY(-50%);">
+                                                <span class="hm-legend-line"></span>
+                                                <span class="hm-legend-label">{{ $tick['value'] }}</span>
+                                            </div>
+                                        @endforeach
+                                    </div>
+
+                                    <div class="mt-3 text-xs sm:text-sm font-medium text-gray-500 dark:text-gray-400 text-center">
+                                        Frequency
+                                    </div>
+                                </div>
+                            </div>
                         </div>
-                    </div>
+                    @endforeach
+
                 </div>
             </div>
         </div>
-
-        {{-- Styles: tooltip & legend (Chart.js defaults) --}}
         <style>
             .vertical-text{ writing-mode: vertical-rl; text-orientation: mixed; }
             [x-cloak]{ display:none !important; }
 
-            /* Tooltip driven by CSS variables from JS to mirror Chart.js options */
             .hm-tip{
-                font-size: var(--font-size, 12px); /* default 12px */
+                font-size: var(--font-size, 12px);
                 font-family: var(--ff, 'Helvetica Neue', 'Helvetica', 'Arial', sans-serif);
                 line-height: 1.2;
                 --bg: rgba(0,0,0,0.8);
@@ -156,7 +199,7 @@
                 --footer-mt: 6px;
                 --caret-size: 5px;
                 --caret-pad: 2px;
-                --caret-x: 12px; /* where the caret meets the box */
+                --caret-x: 12px;
                 background: var(--bg);
                 color: var(--body-color);
                 padding: var(--pad);
@@ -164,7 +207,6 @@
                 border-radius: var(--corner);
             }
             .hm-tip::after{
-                /* caret arrow */
                 content: "";
                 position: absolute;
                 width: 0; height: 0;
@@ -188,59 +230,56 @@
             .hm-dim{ opacity: .7; }
             .hm-footer{ color: var(--footer-color); font-weight: 700; margin-top: var(--footer-mt); }
 
-            /* Legend visuals akin to Chart.js */
             .hm-legend-bar{ border: 0 solid rgba(0,0,0,0); border-radius: 6px; }
             .hm-legend-line{ width: 8px; height: 1px; background-color: rgba(255,255,255,.5); display:inline-block; }
             .hm-legend-label{ color: #fff; font-size: 11px; }
         </style>
 
-        {{-- Chart.js-like tooltip options + Alpine controller --}}
         <script>
-            // Options object using Chart.js tooltip property names
             window.chartJsTooltipOpts = {
-            enabled: true,
-            external: null,
-            mode: 'nearest',
-            intersect: true,
-            position: 'average',
+                enabled: true,
+                external: null,
+                mode: 'nearest',
+                intersect: true,
+                position: 'average',
 
-            backgroundColor: 'rgba(0,0,0,0.8)',
-            titleColor: '#fff',
-            titleFont: { weight: 'bold' }, // family/size/style inherit global (12px normal)
-            titleAlign: 'left',
-            titleSpacing: 2,
-            titleMarginBottom: 6,
+                backgroundColor: 'rgba(0,0,0,0.8)',
+                titleColor: '#fff',
+                titleFont: { weight: 'bold' },
+                titleAlign: 'left',
+                titleSpacing: 2,
+                titleMarginBottom: 6,
 
-            bodyColor: '#fff',
-            bodyFont: { size:12 },                  // inherits global: 12px normal
-            bodyAlign: 'left',
-            bodySpacing: 2,
+                bodyColor: '#fff',
+                bodyFont: { size:12 },
+                bodyAlign: 'left',
+                bodySpacing: 2,
 
-            footerColor: '#fff',
-            footerFont: { weight: 'bold' },
-            footerAlign: 'left',
-            footerSpacing: 2,
-            footerMarginTop: 6,
+                footerColor: '#fff',
+                footerFont: { weight: 'bold' },
+                footerAlign: 'left',
+                footerSpacing: 2,
+                footerMarginTop: 6,
 
-            padding: 6,
-            caretPadding: 2,
-            caretSize: 5,
-            cornerRadius: 6,
+                padding: 6,
+                caretPadding: 2,
+                caretSize: 5,
+                cornerRadius: 6,
 
-            multiKeyBackground: '#fff',
-            displayColors: true,
-            boxWidth: 12,                  // Chart.js uses bodyFont.size
-            boxHeight: 12,                 // "
-            boxPadding: 1,
-            usePointStyle: false,
+                multiKeyBackground: '#fff',
+                displayColors: true,
+                boxWidth: 12,
+                boxHeight: 12,
+                boxPadding: 1,
+                usePointStyle: false,
 
-            borderColor: 'rgba(0,0,0,0)',
-            borderWidth: 0,
+                borderColor: 'rgba(0,0,0,0)',
+                borderWidth: 0,
 
-            rtl: false,                    // Chart.js inherits canvas; leaving false is fine
-            textDirection: 'ltr',          // (optional) omit to inherit canvas default
-            xAlign: undefined,
-            yAlign: undefined,
+                rtl: false,
+                textDirection: 'ltr',
+                xAlign: undefined,
+                yAlign: undefined,
 
                 callbacks: {
                     title: (ctx) => 'Throughput bin',
@@ -268,7 +307,7 @@
                             d: el.dataset.d || '',
                             count: Number(el.dataset.count || 0),
                             color: el.dataset.color || '#fff',
-                            hasData: el.dataset.hasData === '1' || el.dataset.hasData === 'true',
+                            hasRaw: el.dataset.hasRaw === '1' || el.dataset.hasRaw === 'true',
                         };
                         this.show = true;
                     },
@@ -286,7 +325,6 @@
                         return this.opts.callbacks?.footer?.([{ raw: this.info }]) ?? '';
                     },
 
-                    // Compute style from Chart.js-like options
                     get tipStyle(){
                         const o = this.opts;
                         const fs = Number(o.bodyFont?.size ?? 12);
@@ -298,19 +336,16 @@
                         const pad = Number(o.caretPadding ?? 2);
                         const caret = Number(o.caretSize ?? 5);
 
-                        // base position (like 'average')
                         let left = this.x + pad + caret;
                         let top  = this.y + pad + caret;
                         this.caretSide = 'top';
 
-                        // overflow handling (flip if needed)
                         if (left + tw > wrap.width) left = this.x - tw - pad - caret;
                         if (top  + th > wrap.height) { top = this.y - th - pad - caret; this.caretSide = 'bottom'; }
 
                         left = Math.max(0, left);
                         top  = Math.max(0, top);
 
-                        // map options to CSS vars
                         return `
                             left:${left}px; top:${top}px;
                             --fs:${fs}px;
