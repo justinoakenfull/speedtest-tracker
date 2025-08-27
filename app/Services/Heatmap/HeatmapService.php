@@ -155,14 +155,34 @@ class HeatmapService
         float $clampMin,
         float $clampMax
     ): array {
+        // --- Auto-scale legend tick label density by available pixels ---
+        // Legend column in Blade is set to 85% of the chart height.
+        $legendPixelHeight = (int) floor($size * 0.85);
+
+        // Minimum vertical spacing (in px) between labels so they don’t overlap.
+        // 16px works well for 11–12px font; tweak if your legend font changes.
+        $minTickSpacingPx = 16;
+
+        // Convert available pixels to a reasonable number of intervals.
+        // Clamp to avoid silly extremes (2..20 intervals -> 3..21 labels).
+        $autoIntervals = max(2, min(20, (int) floor($legendPixelHeight / max($minTickSpacingPx, 1))));
+
+        // Allow config to override; when null/absent we use the auto value.
+        // NOTE: HeatmapConfig::forCompute() should return 'legend_tick_intervals' as int|null.
+        $tickIntervals = $cfg['legend_tick_intervals'] ?? null;
+        if ($tickIntervals === null) {
+            $tickIntervals = $autoIntervals;
+        } else {
+            $tickIntervals = max(1, (int) $tickIntervals);
+        }
         return [
             'title' => $title,
             'xAxisTitle' => $xAxisTitle,
             'yAxisTitle' => $yAxisTitle,
             'xLabels' => $xLabels,
             'yLabels' => $yLabels,
-            'xTickEvery' => $this->tickEvery($cols, 12),
-            'yTickEvery' => $this->tickEvery($rows, 10),
+            'xTickEvery' => $this->tickEvery($cols, $cfg['axis_x_tick_target']),
+            'yTickEvery' => $this->tickEvery($rows, $cfg['axis_y_tick_target']),
             'width' => $size,
             'height' => $size,
             'gap' => $cfg['gap'],
@@ -172,7 +192,7 @@ class HeatmapService
                 $cfg['tile'], $cfg['gap'], $cfg['color_empty']
             ),
             'legendBar' => $this->legendBar($palette, $cfg['legend_steps']),
-            'legendTicks' => $this->legendTicks($clampMin, $clampMax, 6),
+            'legendTicks' => $this->legendTicks($clampMin, $clampMax, $tickIntervals),
             'tileStrokeColor' => $cfg['tile_stroke_color'],
             'tileStrokeWidth' => $cfg['tile_stroke_width'],
         ];
@@ -505,6 +525,7 @@ class HeatmapService
         bool $colorEmptyCells
     ): array {
         $tiles = [];
+        $epsilon = 1e-12;
 
         $pitch = $tileSize + $tileGap;
 
@@ -522,12 +543,16 @@ class HeatmapService
                 // we still color by feathered density but label as "feathered".
                 if ($hasRawData) {
                     $normalized = $this->scaleValue($densityValue, $legendMin, $legendMax, $valueScaleMode);
-                    $fillColor = HeatmapPalettes::colorAt($paletteName, $normalized);
-                    $tooltip = 'samples: '.(int) $rawCount;
-                } elseif ($colorEmptyCells) {
+                    $fillColor  = HeatmapPalettes::colorAt($paletteName, $normalized);
+                    $tooltip    = 'samples: ' . (int) $rawCount;
+                } elseif ($colorEmptyCells && $densityValue > $epsilon) {
                     $normalized = $this->scaleValue($densityValue, $legendMin, $legendMax, $valueScaleMode);
-                    $fillColor = HeatmapPalettes::colorAt($paletteName, $normalized);
-                    $tooltip = 'feathered';
+                    $fillColor  = HeatmapPalettes::colorAt($paletteName, $normalized);
+                    $tooltip    = 'feathered';
+                } else {
+                    // Force to lowest palette colour
+                    $fillColor  = HeatmapPalettes::colorAt($paletteName, 0.0);
+                    $tooltip    = 'no data';
                 }
 
                 // Positioning:
@@ -599,26 +624,60 @@ class HeatmapService
      *                                                   'pos' => percentage from top (0..100), for CSS positioning,
      *                                                   'value' => integer-rounded numeric value at the tick.
      */
-    private function legendTicks(float $domainMin, float $domainMax, int $legendTickIntervals): array
+    private function legendTicks(float $domainMin, float $domainMax, int $targetIntervals): array
     {
+        $span = max($domainMax - $domainMin, 1e-9);
+        $step = $this->niceStep($span, $targetIntervals);
+
+        $start = $this->niceFloor($domainMin, $step);
+        $end   = $this->niceCeil($domainMax, $step);
+
+        $decimals = max(0, min(6, -(int) floor(log10(max($step, 1e-9)))));
+
         $ticks = [];
+        $lastLabel = null;
 
-        for ($i = 0; $i <= $legendTickIntervals; $i++) {
-            // Fraction across the legend scale, 0..1 inclusive.
-            $t = $i / max($legendTickIntervals, 1);
+        for ($v = $start; $v <= $end + 1e-9; $v += $step) {
+            // 0..1 where 0=domainMin, 1=domainMax
+            $t = ($v - $domainMin) / $span;
 
-            // Position in % from TOP:
-            // Magic: (1 - t) * 100 flips so that larger values are at the top of a
-            // vertical legend (CSS top origin). If your legend grows bottom→top, keep this.
-            $positionPercentFromTop = 100 * (1 - $t);
+            // Clamp for layout; we’ll keep value/label unchanged for integrity.
+            $tClamped = max(0.0, min(1.0, $t));
 
-            // Interpolate the numeric value for the tick.
-            $valueAtTick = $domainMin + $t * ($domainMax - $domainMin);
+            // Convert to top-from-percentage (UI has top=0 at legend's top).
+            $posTop = 100 * (1 - $tClamped);
+
+            // Choose anchor to avoid overflow at extremes
+            $anchor = 'middle';
+            if ($t <= 0.0 + 1e-9) {
+                $anchor = 'bottom';      // place label fully inside at top
+            } elseif ($t >= 1.0 - 1e-9) {
+                $anchor = 'top';   // place label fully inside at bottom
+            }
+
+            // Format label
+            $rounded = round($v, $decimals);
+            if (abs($rounded) < pow(10, -$decimals)) {
+                $rounded = 0.0;
+            }
+            $label = $decimals > 0 ? number_format($rounded, $decimals, '.', '') : (string) (int) round($rounded);
+
+            if ($label === $lastLabel) {
+                continue;
+            }
+            $lastLabel = $label;
 
             $ticks[] = [
-                'pos' => $positionPercentFromTop,
-                'value' => (int) round($valueAtTick),
+                'pos'    => $posTop,   // 0..100
+                'value'  => $rounded,  // numeric
+                'label'  => $label,    // string
+                'anchor' => $anchor,   // 'top' | 'middle' | 'bottom'
             ];
+        }
+
+        if (!$ticks) {
+            $ticks[] = ['pos' => 100, 'value' => $domainMin, 'label' => (string)$domainMin, 'anchor' => 'bottom'];
+            $ticks[] = ['pos' => 0,   'value' => $domainMax, 'label' => (string)$domainMax, 'anchor' => 'top'];
         }
 
         return $ticks;
@@ -674,7 +733,7 @@ class HeatmapService
             // - Palette 'viridis' with 48 steps (smooth enough for placeholders).
             // - Legend ticks from 0..6 with 6 intervals → 7 ticks.
             'tiles' => $tiles,
-            'legendBar' => $this->legendBar('viridis', 48),
+            'legendBar' => $this->legendBar(HeatmapConfig::defaultPalette(), $cfg['legend_steps']),
             'legendTicks' => $this->legendTicks(0, 6, 6),
 
             'tileStrokeColor' => $cfg['tile_stroke_color'],
@@ -1172,6 +1231,7 @@ class HeatmapService
             case 'p99':
                 $legendMax = max(1.0, $p99Value);
                 break;
+            case 'adaptive':
             default: // 'auto'
                 $legendMax = max(1.0, $p99Value);
                 // If there's an extreme outlier, allow expansion

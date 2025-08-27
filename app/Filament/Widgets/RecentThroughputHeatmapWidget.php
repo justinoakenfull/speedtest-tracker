@@ -60,7 +60,7 @@ class RecentThroughputHeatmapWidget extends Widget
     protected function getViewData(): array
     {
         $cfgHash = md5(json_encode(\App\Services\Heatmap\HeatmapConfig::forCompute()));
-        $cacheKey = sprintf('heatmap:composite:v12:%s:%s', $this->palette, $cfgHash);
+        $cacheKey = sprintf('heatmap:composite:v14:%s:%s', $this->palette, $cfgHash);
 
         $panels = Cache::remember($cacheKey, HeatmapConfig::cacheTtl(), function () {
             /** @var HeatmapService $svc */

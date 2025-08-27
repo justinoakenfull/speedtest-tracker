@@ -149,8 +149,10 @@
                                 </div>
 
                                 <div class="w-16 sm:w-20 shrink-0 relative hm-legend">
-                                    <div class="h-full relative" style="height: 85%;">
-                                        <div class="absolute inset-y-0 left-0 w-4 sm:w-5 rounded-md overflow-hidden hm-legend-bar">
+                                    <div class="h-full relative overflow-hidden hm-legend-wrap" style="--vpad:12px;">
+                                        {{-- gradient bar with vertical padding --}}
+                                        <div class="absolute left-0 rounded-md overflow-hidden hm-legend-bar"
+                                             style="top: var(--vpad); bottom: var(--vpad); width: 1.25rem;">
                                             <div class="flex h-full w-full flex-col">
                                                 @foreach ($legendBar as $color)
                                                     <span style="background: {{ $color }}; height: {{ 100 / max(count($legendBar),1) }}%;"></span>
@@ -159,11 +161,29 @@
                                         </div>
 
                                         @foreach ($legendTicks as $tick)
-                                            <div class="absolute flex items-center gap-2"
-                                                 style="left: calc(1.25rem + 4px); top: {{ $tick['pos'] }}%; transform: translateY(-50%);">
-                                                <span class="hm-legend-line"></span>
-                                                <span class="hm-legend-label">{{ $tick['value'] }}</span>
-                                            </div>
+                                            @php
+                                                $anchor    = $tick['anchor'] ?? 'middle';
+                                                $translate = match($anchor) {
+                                                    'top'    => 'translateY(0%)',
+                                                    'bottom' => 'translateY(-100%)',
+                                                    default  => 'translateY(-50%)',
+                                                };
+                                                // keep the raw % from service (0..100 from top)
+                                                $pos = (float) $tick['pos'];
+                                            @endphp
+
+                                            {{-- 1px rule at the exact value, adjusted for vertical padding --}}
+                                            <span class="hm-legend-line absolute"
+                                                  style="left: calc(1.25rem + 4px);
+                         top: calc(var(--vpad) + ({{ $pos }}% * (100% - (2 * var(--vpad))) / 100));"></span>
+
+                                            {{-- label at the same position, anchored to stay inside --}}
+                                            <span class="hm-legend-label absolute"
+                                                  style="left: calc(1.25rem + 4px + 12px);
+                         top: calc(var(--vpad) + ({{ $pos }}% * (100% - (2 * var(--vpad))) / 100));
+                         transform: {{ $translate }};">
+                {{ $tick['value'] }}
+            </span>
                                         @endforeach
                                     </div>
 
@@ -181,6 +201,15 @@
         <style>
             .vertical-text{ writing-mode: vertical-rl; text-orientation: mixed; }
             [x-cloak]{ display:none !important; }
+
+            .hm-legend-line{
+                width: 8px;
+                height: 1px;
+                background-color: rgba(255,255,255,.5);
+                display: inline-block;
+                transform: translateY(-0.5px);
+            }
+            .hm-legend-label{ color:#fff; font-size:11px; white-space:nowrap; }
 
             .hm-tip{
                 font-size: var(--font-size, 12px);
@@ -200,6 +229,7 @@
                 --caret-size: 5px;
                 --caret-pad: 2px;
                 --caret-x: 12px;
+                --vpad: 16px;
                 background: var(--bg);
                 color: var(--body-color);
                 padding: var(--pad);
@@ -231,8 +261,6 @@
             .hm-footer{ color: var(--footer-color); font-weight: 700; margin-top: var(--footer-mt); }
 
             .hm-legend-bar{ border: 0 solid rgba(0,0,0,0); border-radius: 6px; }
-            .hm-legend-line{ width: 8px; height: 1px; background-color: rgba(255,255,255,.5); display:inline-block; }
-            .hm-legend-label{ color: #fff; font-size: 11px; }
         </style>
 
         <script>
